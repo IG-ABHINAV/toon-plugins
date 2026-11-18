@@ -1,4 +1,4 @@
-// The submission fee pilot (CONTRIBUTING.md). A pull request from an outside contributor
+// The submission fee (CONTRIBUTING.md). A pull request from an outside contributor
 // needs a small USDC fee on Base, sent from the wallet its author registered on
 // slop.cash to the address in `.github/submission-fee.json`. This script reads the open
 // pull requests, checks each payment on chain, and labels, comments, closes or reopens.
@@ -37,7 +37,7 @@ const PAID_MARK = /<!-- submission-fee:paid tx=(0x[0-9a-f]{64}) from=(0x[0-9a-f]
 const address = (value) => /^0x[0-9a-fA-F]{40}$/.test(value ?? '');
 
 /**
- * The settings in `.github/submission-fee.json`, or `null` when the pilot is off. It is
+ * The settings in `.github/submission-fee.json`, or `null` when the fee is off. It is
  * off unless `enabled` is true and the address, start time and amount are all valid, so a
  * half-filled file does nothing.
  */
@@ -84,7 +84,7 @@ export function paymentProblem({ receipt, block, head, wallet, cfg }) {
   if (head - BigInt(receipt.blockNumber) < BigInt(cfg.confirmations))
     return 'the transaction is too recent; it is checked again on the next run';
   if (!block || Number(BigInt(block.timestamp)) * 1000 < cfg.startAt)
-    return 'the transaction is older than the pilot';
+    return 'the transaction is older than the submission fee';
   const paid = (receipt.logs ?? []).some(
     (log) =>
       log.address?.toLowerCase() === cfg.token &&
@@ -108,7 +108,7 @@ function neededBody(cfg) {
     mark.needed,
     `**This pull request needs a ${cfg.display} submission fee before a maintainer reviews it.**`,
     '',
-    `This repository is trying a submission fee for pull requests from outside contributors. The rules are in [CONTRIBUTING.md](https://github.com/${cfg.repo}/blob/main/CONTRIBUTING.md#submission-fee-pilot).`,
+    `This repository has a submission fee for pull requests from outside contributors. The rules are in [CONTRIBUTING.md](https://github.com/${cfg.repo}/blob/main/CONTRIBUTING.md#submission-fee).`,
     '',
     '1. Register a Base wallet for your GitHub account at https://slop.cash/earnings, if you have not.',
     `2. From that wallet, send ${cfg.display} on Base to \`${cfg.feeAddress}\`.`,
@@ -132,7 +132,7 @@ const paidBody = (cfg, tx, wallet) =>
 const refundBody = (cfg, wallet, reason) =>
   [
     mark.refund,
-    `**Refund due:** ${cfg.display} to \`${wallet}\`, because ${reason}. Refunds are sent by hand once a month during the pilot.`,
+    `**Refund due:** ${cfg.display} to \`${wallet}\`, because ${reason}. Refunds are sent by hand once a month.`,
   ].join('\n');
 
 /**
@@ -332,7 +332,7 @@ async function main() {
     fileURLToPath(new URL('../.github/submission-fee.json', import.meta.url));
   const repo = process.env.GITHUB_REPOSITORY;
   const cfg = settings(JSON.parse(readFileSync(file, 'utf8')), repo);
-  if (!cfg) return console.log('The submission fee pilot is off (.github/submission-fee.json).');
+  if (!cfg) return console.log('The submission fee is off (.github/submission-fee.json).');
 
   const token = process.env.GITHUB_TOKEN;
   if (!repo || !token) throw new Error('GITHUB_REPOSITORY and GITHUB_TOKEN are required');

@@ -76,7 +76,7 @@ const world = ({ comments = [], wallet = WALLET, receipts = {}, used = [], now =
 });
 const types = (actions) => actions.map((action) => action.type);
 
-test('the pilot is off unless the settings are complete', () => {
+test('the fee is off unless the settings are complete', () => {
   const whole = {
     enabled: true,
     feeAddress: FEE,
@@ -128,7 +128,7 @@ test('a payment is a USDC transfer of the fee from the registered wallet to the 
   assert.match(check(null), /not found/);
   assert.match(check({ ...paid, status: '0x0' }), /failed/);
   assert.match(check(paid, { head: 120n }), /too recent/);
-  assert.match(check(paid, { block: blockAt(START - DAY) }), /older than the pilot/);
+  assert.match(check(paid, { block: blockAt(START - DAY) }), /older than the submission fee/);
   assert.match(check(receiptOf(transfer(WALLET, FEE, 1_999_999n))), /no transfer/);
   assert.match(check(receiptOf(transfer(OTHER, FEE, 2_000_000n))), /no transfer/);
   assert.match(check(receiptOf(transfer(WALLET, OTHER, 2_000_000n))), /no transfer/);
