@@ -1,0 +1,42 @@
+# The submission fee pilot (CONTRIBUTING.md). Every 15 minutes this reads the open pull
+# requests, checks each outside contributor's fee payment on Base, and labels, comments,
+# closes or reopens. The rules and the on/off switch are `.github/submission-fee.json`;
+# while `enabled` is false there, a run prints one line and changes nothing.
+#
+# Scheduled, so it always runs `main`'s own copy of the script with the repository's own
+# token. It never checks out a pull request's code, needs no secret, and moves no money.
+# Not `pull_request_target`: nothing here runs because a pull request arrived.
+
+name: submission-fee
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: submission-fee
+  cancel-in-progress: false
+
+jobs:
+  check:
+    # A manual run from another branch would run that branch's script with this token.
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      - name: Check submission fees
+        run: node checks/submission-fee.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # Optional: another Base endpoint, when the public one is refusing requests.
+          BASE_RPC_URL: ${{ vars.BASE_RPC_URL }}

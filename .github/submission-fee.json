@@ -1,0 +1,11 @@
+{
+  "enabled": false,
+  "feeAddress": null,
+  "startAt": null,
+  "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "amountMinor": "2000000",
+  "amountDisplay": "2 USDC",
+  "confirmations": 60,
+  "closeUnpaidAfterDays": 7,
+  "refundUndecidedAfterDays": 14
+}
