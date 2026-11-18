@@ -2,14 +2,15 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { BOT, LABEL, decide, refundsPending, settings } from './submission-fee.mjs';
+import { BURN_ADDRESS } from './submission-fee.mjs';
 import {
   DEAD_AFTER,
   MAX_ATTEMPTS,
+  burnMark,
   inOrder,
   ledger,
-  paidAmount,
-  refund,
   refundMark,
+  settle as refund,
   transferData,
 } from './submission-fee-refund.mjs';
 
@@ -64,11 +65,10 @@ const openPr = { number: 7, state: 'open', pull_request: { merged_at: null }, la
 /** The outside world, and a record of what the refund did to it, in order. */
 function world({ comments = [paidNote()], receipts = { [PAY]: feePaid }, nonce = 5, short = null, mined = refundMined, broadcastFails = false, now = NOW, books } = {}) {
   const did = [];
-  const deps = {
-    now,
-    head: 1000n,
-    ledger: books ?? ledger(comments),
-    comments: async () => comments,
+  // One chain's calls. `asked` records which chain each was made on.
+  const asked = [];
+  const calls = {
+    head: async () => 1000n,
     receipt: async (tx) => receipts[tx] ?? null,
     block: async () => ({ timestamp: `0x${Math.floor((START + DAY) / 1000).toString(16)}` }),
     nonce: async () => nonce,
@@ -82,9 +82,19 @@ function world({ comments = [paidNote()], receipts = { [PAY]: feePaid }, nonce =
       if (broadcastFails) throw new Error('nonce too low');
     },
     mined: async () => mined,
+  };
+  const deps = {
+    now,
+    ledger: books ?? ledger(comments),
+    busy: new Set(),
+    comments: async () => comments,
+    chain: (key) => {
+      asked.push(key);
+      return calls;
+    },
     comment: async (number, body) => did.push({ comment: body, number }),
   };
-  return { deps, did };
+  return { deps, did, asked };
 }
 const kinds = (did) => did.map((entry) => Object.keys(entry)[0]);
 
@@ -118,19 +128,24 @@ test('call data is transfer(to, amount)', () => {
   );
 });
 
-test('the refund is the fee, never more, and nothing when the payment does not match', () => {
-  assert.equal(paidAmount(feePaid, WALLET, cfg), 2_000_000n);
-  assert.equal(paidAmount(receiptOf(transfer(WALLET, FEE, 9_000_000n)), WALLET, cfg), 2_000_000n);
-  assert.equal(paidAmount(receiptOf(transfer(OTHER, FEE, 2_000_000n)), WALLET, cfg), 0n);
-  assert.equal(paidAmount(receiptOf(transfer(WALLET, FEE, 1_000_000n)), WALLET, cfg), 0n);
+test('the refund is the fee, never more, and nothing when the payment does not match', async () => {
+  const sentFor = async (receipt) => {
+    const { deps, did } = world({ receipts: { [PAY]: receipt } });
+    await refund(mergedPr, deps, cfg);
+    return did[0]?.sign.amount ?? 0n;
+  };
+  assert.equal(await sentFor(feePaid), 2_000_000n);
+  assert.equal(await sentFor(receiptOf(transfer(WALLET, FEE, 9_000_000n))), 2_000_000n);
+  assert.equal(await sentFor(receiptOf(transfer(OTHER, FEE, 2_000_000n))), 0n);
+  assert.equal(await sentFor(receiptOf(transfer(WALLET, FEE, 1_000_000n))), 0n);
 });
 
 test('a merged, paid pull request: note the hash, then broadcast, then record it sent', async () => {
   const { deps, did } = world();
   const result = await refund(mergedPr, deps, cfg);
-  assert.deepEqual(result, { status: 'sent', tx: R1 });
+  assert.deepEqual(result, { status: 'sent', kind: 'refund', tx: R1 });
   assert.deepEqual(kinds(did), ['sign', 'comment', 'broadcast', 'comment']);
-  assert.deepEqual(did[0].sign, { to: WALLET, amount: 2_000_000n, nonce: 5 });
+  assert.deepEqual(did[0].sign, { token: USDC, to: WALLET, amount: 2_000_000n, nonce: 5 });
   assert.equal(did[1].comment, refundMark.sending(PAY, R1, 5));
   assert.ok(did[3].comment.startsWith(refundMark.sent(PAY, R1)));
   assert.ok(deps.ledger.refunded.has(PAY));
@@ -139,7 +154,7 @@ test('a merged, paid pull request: note the hash, then broadcast, then record it
 test('a refund already recorded as sent is never sent again', async () => {
   const comments = [paidNote(), bot(`${refundMark.sent(PAY, R1)}\n**Refund sent:** ...`)];
   const { deps, did } = world({ comments });
-  assert.deepEqual(await refund(mergedPr, deps, cfg), { status: 'sent', tx: R1, already: true });
+  assert.deepEqual(await refund(mergedPr, deps, cfg), { status: 'sent', kind: 'refund', tx: R1, already: true });
   assert.deepEqual(did, []);
 });
 
@@ -172,9 +187,9 @@ test('the payment is checked on Base again before anything is signed', async () 
 });
 
 test('one payment, one refund, on the pull request it paid for', async () => {
-  const elsewhere = world({ books: { paidOn: new Map([[PAY, 3]]), refunded: new Set(), started: new Map() } });
+  const elsewhere = world({ books: { paidOn: new Map([[PAY, 3]]), refunded: new Set(), burned: new Set(), started: new Map() } });
   assert.match((await refund(mergedPr, elsewhere.deps, cfg)).reason, /another pull request/);
-  const refunded = world({ books: { paidOn: new Map([[PAY, 7]]), refunded: new Set([PAY]), started: new Map() } });
+  const refunded = world({ books: { paidOn: new Map([[PAY, 7]]), refunded: new Set([PAY]), burned: new Set(), started: new Map() } });
   assert.match((await refund(mergedPr, refunded.deps, cfg)).reason, /already refunded/);
   assert.deepEqual([...elsewhere.did, ...refunded.did], []);
 });
@@ -197,7 +212,7 @@ test('a run that died after the broadcast: the mined transaction is recorded, no
     receipts: { [PAY]: feePaid, [R2]: refundMined },
     nonce: 6,
   });
-  assert.deepEqual(await refund(mergedPr, deps, cfg), { status: 'sent', tx: R2 });
+  assert.deepEqual(await refund(mergedPr, deps, cfg), { status: 'sent', kind: 'refund', tx: R2 });
   assert.deepEqual(kinds(did), ['comment']);
 });
 
@@ -234,7 +249,7 @@ test('a refund that failed on Base is tried again, up to a limit', async () => {
 test('a mined transaction that is not this refund does not count as one', async () => {
   const wrong = receiptOf(transfer(FEE, OTHER, 2_000_000n));
   const { deps, did } = world({ comments: [paidNote(), sending(R2, 5)], receipts: { [PAY]: feePaid, [R2]: wrong }, nonce: 6 });
-  assert.deepEqual(await refund(mergedPr, deps, cfg), { status: 'sent', tx: R1 });
+  assert.deepEqual(await refund(mergedPr, deps, cfg), { status: 'sent', kind: 'refund', tx: R1 });
   assert.equal(did[0].sign.nonce, 6);
 });
 
@@ -242,11 +257,11 @@ test('Base refusing or not mining the transaction stops the run from sending mor
   const refused = world({ broadcastFails: true });
   const first = await refund(mergedPr, refused.deps, cfg);
   assert.equal(first.status, 'retry');
-  assert.equal(first.inFlight, true);
+  assert.equal(first.inFlight, 'base');
   assert.deepEqual(kinds(refused.did), ['sign', 'comment', 'broadcast']);
 
   const slow = world({ mined: null });
-  assert.deepEqual(await refund(mergedPr, slow.deps, cfg), { status: 'pending', inFlight: true, tx: R1 });
+  assert.deepEqual(await refund(mergedPr, slow.deps, cfg), { status: 'pending', inFlight: 'base', tx: R1 });
 
   const reverted = world({ mined: failedOnChain });
   const third = await refund(mergedPr, reverted.deps, cfg);
@@ -270,4 +285,134 @@ test('the ledger reads only the workflow\'s own notes, and started refunds go fi
 
   const order = inOrder([{ number: 3 }, { number: 12 }, { number: 7 }], new Map([[12, 9], [7, 6]]));
   assert.deepEqual(order.map((issue) => issue.number), [7, 12, 3]);
+});
+
+// ---- Fees paid in SLOP on Robinhood Chain: refunded in SLOP, or burned when kept. ----
+
+const SLOP = '0xfeb4e36fa4a2a494ff25ae4a63491e4c584a67ae';
+const SEVENTY_FIVE = 75n * 10n ** 18n;
+const slopWay = {
+  id: 'slop', chain: 'robinhood', token: SLOP, amountMinor: SEVENTY_FIVE.toString(), amountDisplay: '75 SLOP',
+  symbol: 'SLOP', decimals: 18, keptFees: 'burn', burnAfterDays: 7,
+};
+const two = settings({ ...raw, alsoAccepted: [slopWay] });
+const slopTransfer = (from, to, amount = SEVENTY_FIVE) => ({ ...transfer(from, to, amount), address: SLOP });
+const slopFee = receiptOf(slopTransfer(WALLET, FEE));
+const slopNote = (when = at(2)) =>
+  bot(`<!-- submission-fee:paid tx=${PAY} from=${WALLET} via=slop amt=${SEVENTY_FIVE} -->\n**Submission fee received.**`, when);
+const closedPr = (days, ...names) => ({
+  number: 7, state: 'closed', closed_at: at(days), pull_request: { merged_at: null },
+  labels: [LABEL.burnDue, ...names].map((name) => ({ name })),
+});
+
+test('a merged pull request paid in SLOP: the same SLOP goes back, on Robinhood Chain', async () => {
+  const { deps, did, asked } = world({
+    comments: [slopNote()],
+    receipts: { [PAY]: slopFee },
+    mined: receiptOf(slopTransfer(FEE, WALLET)),
+  });
+  assert.deepEqual(await refund(mergedPr, deps, two), { status: 'sent', kind: 'refund', tx: R1 });
+  assert.deepEqual(asked, ['robinhood']);
+  assert.deepEqual(did[0].sign, { token: SLOP, to: WALLET, amount: SEVENTY_FIVE, nonce: 5 });
+  assert.match(did[3].comment, /\*\*Refund sent:\*\* 75 SLOP to/);
+});
+
+test('the refund is what was paid then, even after the fee is set higher or lower', async () => {
+  for (const now of ['100', '50']) {
+    const changed = settings({
+      ...raw,
+      alsoAccepted: [{ ...slopWay, amountMinor: (BigInt(now) * 10n ** 18n).toString(), amountDisplay: `${now} SLOP` }],
+    });
+    const { deps, did } = world({ comments: [slopNote()], receipts: { [PAY]: slopFee }, mined: receiptOf(slopTransfer(FEE, WALLET)) });
+    assert.equal((await refund(mergedPr, deps, changed)).status, 'sent');
+    assert.equal(did[0].sign.amount, SEVENTY_FIVE);
+  }
+  // A note that claims more than the transaction moved sends nothing.
+  const { deps, did } = world({ comments: [slopNote()], receipts: { [PAY]: receiptOf(slopTransfer(WALLET, FEE, SEVENTY_FIVE - 1n)) } });
+  assert.match((await refund(mergedPr, deps, two)).reason, /does not check out/);
+  assert.deepEqual(did, []);
+});
+
+test('closed seven days without a merge: the SLOP fee goes to the burn address, once', async () => {
+  const burnt = receiptOf(slopTransfer(FEE, BURN_ADDRESS));
+  const { deps, did } = world({ comments: [slopNote()], receipts: { [PAY]: slopFee }, mined: burnt });
+  assert.deepEqual(await refund(closedPr(12), deps, two), { status: 'sent', kind: 'burn', tx: R1 });
+  assert.deepEqual(kinds(did), ['sign', 'comment', 'broadcast', 'comment']);
+  assert.deepEqual(did[0].sign, { token: SLOP, to: BURN_ADDRESS, amount: SEVENTY_FIVE, nonce: 5 });
+  assert.equal(did[1].comment, burnMark.sending(PAY, R1, 5));
+  assert.ok(did[3].comment.startsWith(burnMark.sent(PAY, R1)));
+  assert.ok(deps.ledger.burned.has(PAY));
+
+  const again = world({ comments: [slopNote(), bot(`${burnMark.sent(PAY, R1)}\n**Fee burned:** ...`)], receipts: { [PAY]: slopFee } });
+  assert.deepEqual(await refund(closedPr(12), again.deps, two), { status: 'sent', kind: 'burn', tx: R1, already: true });
+  assert.deepEqual(again.did, []);
+});
+
+test('a burn label alone burns nothing: too early, reopened, or a fee that is kept', async () => {
+  const early = world({ comments: [slopNote()], receipts: { [PAY]: slopFee } });
+  assert.equal((await refund(closedPr(15), early.deps, two)).status, 'retry');
+  const reopened = world({ comments: [slopNote()], receipts: { [PAY]: slopFee } });
+  const open = { number: 7, state: 'open', closed_at: null, pull_request: { merged_at: null }, labels: [{ name: LABEL.burnDue }] };
+  assert.equal((await refund(open, reopened.deps, two)).status, 'retry');
+  // A USDC fee is never burned, whatever the label says.
+  const usdc = world();
+  assert.equal((await refund(closedPr(5), usdc.deps, two)).status, 'retry');
+  for (const { did } of [early, reopened, usdc]) assert.deepEqual(did, []);
+});
+
+test('a burn that was signed is finished even if the pull request is reopened, and is never refunded', async () => {
+  const signed = bot(burnMark.sending(PAY, R2, 5), at(19));
+  const burnt = receiptOf(slopTransfer(FEE, BURN_ADDRESS));
+  // Reopened and merged after the note: the mined burn is recorded, no refund is signed.
+  const landed = world({ comments: [slopNote(), signed], receipts: { [PAY]: slopFee, [R2]: burnt }, nonce: 6 });
+  assert.deepEqual(await refund(mergedPr, landed.deps, two), { status: 'sent', kind: 'burn', tx: R2 });
+  assert.deepEqual(kinds(landed.did), ['comment']);
+  // Not mined yet: the same nonce is signed again, to the burn address, not to the payer.
+  const unmined = world({ comments: [slopNote(), signed], receipts: { [PAY]: slopFee }, nonce: 5, mined: burnt });
+  assert.equal((await refund(mergedPr, unmined.deps, two)).kind, 'burn');
+  assert.equal(unmined.did[0].sign.to, BURN_ADDRESS);
+  assert.equal(unmined.did[0].sign.nonce, 5);
+  // A payment already burned elsewhere in the books is not sent again.
+  const books = { paidOn: new Map([[PAY, 7]]), refunded: new Set(), burned: new Set([PAY]), started: new Map() };
+  const burned = world({ comments: [slopNote()], receipts: { [PAY]: slopFee }, books });
+  assert.match((await refund(mergedPr, burned.deps, two)).reason, /already burned/);
+  assert.deepEqual(burned.did, []);
+});
+
+test('a refund comes before a burn: undecided for fourteen days, then closed', async () => {
+  const { deps, did } = world({
+    comments: [slopNote(at(2)), dueNote],
+    receipts: { [PAY]: slopFee },
+    mined: receiptOf(slopTransfer(FEE, WALLET)),
+  });
+  const closedLater = { ...closedPr(8), labels: [{ name: LABEL.refundDue }] };
+  assert.equal((await refund(closedLater, deps, two)).kind, 'refund');
+  assert.equal(did[0].sign.to, WALLET);
+});
+
+test('a way to pay the settings no longer list, or a chain already busy, sends nothing', async () => {
+  const gone = world({ comments: [slopNote()], receipts: { [PAY]: slopFee } });
+  assert.match((await refund(mergedPr, gone.deps, cfg)).reason, /no longer list/);
+  const busy = world({ comments: [slopNote()], receipts: { [PAY]: slopFee } });
+  busy.deps.busy.add('robinhood');
+  assert.equal((await refund(mergedPr, busy.deps, two)).status, 'retry');
+  // Base is not held up by a transaction in flight on Robinhood Chain.
+  const base = world();
+  base.deps.busy.add('robinhood');
+  assert.equal((await refund(mergedPr, base.deps, two)).status, 'sent');
+  for (const { did } of [gone, busy]) assert.deepEqual(did, []);
+});
+
+test('the ledger counts burns, and a started burn holds its place in the order', () => {
+  const comments = [slopNote(), bot(burnMark.sending(PAY, R2, 4), at(4), 7)];
+  assert.deepEqual([...ledger(comments).started], [[7, 4]]);
+  const done = ledger([...comments, bot(burnMark.sent(PAY, R2))]);
+  assert.deepEqual([[...done.burned], done.refunded.size, done.started.size], [[PAY], 0, 0]);
+});
+
+test('the sender job is wanted while a burn is due and neither sent nor set aside', () => {
+  const issue = (...names) => ({ labels: names.map((name) => ({ name })) });
+  assert.equal(refundsPending([issue(LABEL.burnDue)]), true);
+  assert.equal(refundsPending([issue(LABEL.burnDue, LABEL.burned)]), false);
+  assert.equal(refundsPending([issue(LABEL.burnDue, LABEL.refundCheck)]), false);
 });
