@@ -4,12 +4,15 @@ import { test } from 'node:test';
 
 import {
   BOT,
+  BURN_ADDRESS,
   LABEL,
   decide,
   exempt,
   hashesIn,
+  paidRecord,
   paymentProblem,
   settings,
+  show,
   usedHashes,
 } from './submission-fee.mjs';
 
@@ -65,13 +68,14 @@ const bot = (body, days = 1) => ({ user: { login: BOT }, body, created_at: at(da
 const author = (body) => ({ user: { id: 42, login: 'outsider' }, body, created_at: at(1) });
 
 /** The outside world: comments on the pull request, a registered wallet, receipts by hash. */
-const world = ({ comments = [], wallet = WALLET, receipts = {}, used = [], now = NOW } = {}) => ({
+// `receipts` and `wallet` are Base's; `robinhood` holds the same two for Robinhood Chain.
+const world = ({ comments = [], wallet = WALLET, receipts = {}, robinhood = {}, used = [], now = NOW, head = 1000n } = {}) => ({
   now,
-  head: 1000n,
+  head: async () => head,
   used: new Set(used),
   comments: async () => comments,
-  wallet: async () => wallet,
-  receipt: async (tx) => receipts[tx] ?? null,
+  wallet: async (id, chain) => (chain === 'robinhood' ? (robinhood.wallet ?? null) : wallet),
+  receipt: async (tx, chain) => (chain === 'robinhood' ? robinhood.receipts : receipts)?.[tx] ?? null,
   block: async () => blockAt(START + DAY),
 });
 const types = (actions) => actions.map((action) => action.type);
@@ -98,10 +102,17 @@ test('the committed settings file parses, and is off until an address and a star
   assert.equal(raw.amountMinor, '2000000');
   assert.equal(raw.token.toLowerCase(), USDC);
   if (raw.enabled) {
-    assert.ok(settings(raw), 'an enabled settings file must be complete');
-    // The address a contributor is told to pay must be the one written in the rules.
+    const parsed = settings(raw);
+    assert.ok(parsed, 'an enabled settings file must be complete');
+    assert.equal(parsed.options.length, 1 + (raw.alsoAccepted ?? []).length, 'every way to pay must be complete');
+    // The address a contributor is told to pay, and each token and amount, must be the
+    // ones written in the rules.
     const rules = readFileSync(new URL('../CONTRIBUTING.md', import.meta.url), 'utf8');
     assert.ok(rules.toLowerCase().includes(raw.feeAddress.toLowerCase()));
+    for (const way of parsed.options) {
+      assert.ok(rules.includes(way.display), `CONTRIBUTING.md must name ${way.display}`);
+      if (way.id !== 'usdc') assert.ok(rules.toLowerCase().includes(way.token), `CONTRIBUTING.md must name the ${way.display} token`);
+    }
   } else {
     assert.equal(settings(raw), null);
   }
@@ -191,8 +202,15 @@ test('a hash that does not count is answered once, with the reason', async () =>
   assert.deepEqual(types(reused), ['comment']);
   assert.match(reused[0].body, /already paid for another pull request/);
 
-  const noWallet = await decide(pull({ body: TX }), world({ comments: [asked], wallet: null }), cfg);
+  const noWallet = await decide(
+    pull({ body: TX }),
+    world({ comments: [asked], receipts: { [TX]: paid }, wallet: null }),
+    cfg,
+  );
   assert.match(noWallet[0].body, /no Base wallet registered/);
+
+  const nowhere = await decide(pull({ body: TX }), world({ comments: [asked] }), cfg);
+  assert.match(nowhere[0].body, /not found on Base\./);
 
   const answered = [asked, bot(`<!-- submission-fee:rejected tx=${TX} -->`, 19)];
   assert.deepEqual(await decide(pull({ body: TX }), world({ comments: answered, used: [TX] }), cfg), []);
@@ -200,7 +218,7 @@ test('a hash that does not count is answered once, with the reason', async () =>
 
 test('a payment too recent to trust is retried silently', async () => {
   const asked = [bot('<!-- submission-fee:needed -->', 18)];
-  const deps = { ...world({ comments: asked, receipts: { [TX]: paid } }), head: 110n };
+  const deps = world({ comments: asked, receipts: { [TX]: paid }, head: 110n });
   assert.deepEqual(await decide(pull({ body: TX }), deps, cfg), []);
 });
 
@@ -251,4 +269,154 @@ test('a paid pull request nobody decided in fourteen days gets a refund notice',
 test('a pull request merged without the fee is left alone', async () => {
   const merged = pull({ state: 'closed', merged_at: at(3), closed_at: at(3) });
   assert.deepEqual(await decide(merged, world(), cfg), []);
+});
+
+// ---- A second way to pay: SLOP on Robinhood Chain, burned when kept. ----
+
+const SLOP = '0xfeb4e36fa4a2a494ff25ae4a63491e4c584a67ae';
+const RC_WALLET = '0x00000000000000000000000000000000000000cc';
+const SEVENTY_FIVE = 75n * 10n ** 18n;
+const two = settings({
+  enabled: true,
+  feeAddress: FEE,
+  refundWallet: FEE,
+  startAt: '2026-12-01T00:00:00Z',
+  token: USDC,
+  amountMinor: '2000000',
+  amountDisplay: '2 USDC',
+  symbol: 'USDC',
+  decimals: 6,
+  alsoAccepted: [
+    {
+      id: 'slop',
+      chain: 'robinhood',
+      token: SLOP,
+      amountMinor: SEVENTY_FIVE.toString(),
+      amountDisplay: '75 SLOP',
+      symbol: 'SLOP',
+      decimals: 18,
+      confirmations: 600,
+      keptFees: 'burn',
+      burnAfterDays: 7,
+    },
+  ],
+});
+const slopPaid = receiptOf(transfer(RC_WALLET, FEE, SEVENTY_FIVE, SLOP));
+const slopNote = (days = 2) =>
+  bot(`<!-- submission-fee:paid tx=${TX} from=${RC_WALLET} via=slop amt=${SEVENTY_FIVE} -->`, days);
+
+test('a second way to pay is read from alsoAccepted; an incomplete one is left out', () => {
+  assert.deepEqual(two.options.map((way) => [way.id, way.chain.key, way.kept]), [
+    ['usdc', 'base', 'keep'],
+    ['slop', 'robinhood', 'burn'],
+  ]);
+  assert.equal(two.options[1].amount, SEVENTY_FIVE);
+  const broken = (extra) =>
+    settings({ enabled: true, feeAddress: FEE, startAt: '2026-12-01T00:00:00Z', token: USDC, amountMinor: '2000000', alsoAccepted: [extra] });
+  for (const extra of [
+    { id: 'slop', chain: 'robinhood', token: SLOP },
+    { id: 'slop', chain: 'moon', token: SLOP, amountMinor: '1' },
+    { id: 'slop', chain: 'robinhood', token: '0x12', amountMinor: '1' },
+    { id: 'usdc', chain: 'robinhood', token: SLOP, amountMinor: '1' },
+    null,
+  ])
+    assert.deepEqual(broken(extra).options.map((way) => way.id), ['usdc']);
+});
+
+test('amounts are shown in words', () => {
+  const [usdc, slop] = two.options;
+  assert.equal(show(slop, SEVENTY_FIVE), '75 SLOP');
+  assert.equal(show(slop, 100n * 10n ** 18n), '100 SLOP');
+  assert.equal(show(slop, 125n * 10n ** 17n), '12.5 SLOP');
+  assert.equal(show(usdc, 1_500_000n), '1.5 USDC');
+  assert.equal(show(cfg.options[0], 1_500_000n), '1500000 base units');
+  assert.equal(show(null, 1n), 'the fee');
+});
+
+test('the notice lists both ways to pay, and says a kept SLOP fee is burned', async () => {
+  const [ask] = await decide(pull(), world(), two);
+  assert.match(ask.body, /2 USDC on Base, or 75 SLOP on Robinhood Chain/);
+  assert.ok(ask.body.includes(SLOP));
+  assert.match(ask.body, /paid in SLOP is burned once the pull request has stayed closed for 7 days/);
+});
+
+test('SLOP on Robinhood Chain from the wallet registered there pays the fee', async () => {
+  const deps = world({ robinhood: { wallet: RC_WALLET, receipts: { [TX]: slopPaid } } });
+  const actions = await decide(pull({ body: TX }), deps, two);
+  assert.deepEqual(types(actions), ['comment', 'label']);
+  assert.ok(actions[0].body.includes(`tx=${TX} from=${RC_WALLET} via=slop amt=${SEVENTY_FIVE} -->`));
+  assert.match(actions[0].body, /75 SLOP on Robinhood Chain/);
+  assert.deepEqual(actions[1].add, [LABEL.paid]);
+});
+
+test('a SLOP payment that does not count says why', async () => {
+  const asked = [bot('<!-- submission-fee:needed -->', 18)];
+  const reason = async (robinhood) =>
+    (await decide(pull({ body: TX }), world({ comments: asked, robinhood }), two))[0].body;
+  assert.match(await reason({ receipts: { [TX]: slopPaid } }), /no Robinhood Chain wallet registered/);
+  assert.match(await reason({ wallet: OTHER, receipts: { [TX]: slopPaid } }), /no transfer of at least 75 SLOP/);
+  const short = receiptOf(transfer(RC_WALLET, FEE, SEVENTY_FIVE - 1n, SLOP));
+  assert.match(await reason({ wallet: RC_WALLET, receipts: { [TX]: short } }), /no transfer of at least 75 SLOP/);
+  // The right amount of another token on that chain is not the fee.
+  const imitation = receiptOf(transfer(RC_WALLET, FEE, SEVENTY_FIVE, OTHER));
+  assert.match(await reason({ wallet: RC_WALLET, receipts: { [TX]: imitation } }), /no transfer/);
+  assert.match(await reason({}), /not found on Base or Robinhood Chain/);
+  // The Base wallet is not asked about a Robinhood Chain payment, nor the other way round.
+  const usdcOnRobinhood = receiptOf(transfer(WALLET, FEE, 2_000_000n));
+  assert.match(await reason({ wallet: WALLET, receipts: { [TX]: usdcOnRobinhood } }), /no transfer of at least 75 SLOP/);
+});
+
+test('the payment note records the way paid and the amount; an older note means USDC', () => {
+  const now = paidRecord([slopNote()], two);
+  assert.deepEqual([now.tx, now.wallet, now.option.id, now.amount], [TX, RC_WALLET, 'slop', SEVENTY_FIVE]);
+  const older = paidRecord([bot(`<!-- submission-fee:paid tx=${TX} from=${WALLET} -->`)], two);
+  assert.deepEqual([older.option.id, older.amount], ['usdc', 2_000_000n]);
+  assert.equal(paidRecord([slopNote()], cfg).option, null, 'a way the settings no longer list');
+  assert.equal(paidRecord([author(slopNote().body)], two), null);
+});
+
+test('a merged pull request paid in SLOP is refunded what was paid then, whatever the fee is now', async () => {
+  const dearer = settings({
+    enabled: true, feeAddress: FEE, startAt: '2026-12-01T00:00:00Z', token: USDC, amountMinor: '2000000',
+    alsoAccepted: [{ id: 'slop', chain: 'robinhood', token: SLOP, amountMinor: (100n * 10n ** 18n).toString(), amountDisplay: '100 SLOP', symbol: 'SLOP', decimals: 18 }],
+  });
+  const merged = pull({ state: 'closed', merged_at: at(3), closed_at: at(3), labels: labelled(LABEL.paid) });
+  const [notice] = await decide(merged, world({ comments: [slopNote()] }), dearer);
+  assert.match(notice.body, /\*\*Refund due:\*\* 75 SLOP to/);
+  assert.ok(notice.body.includes(RC_WALLET));
+});
+
+test('a kept SLOP fee is marked for burning once the pull request has stayed closed seven days', async () => {
+  const closed = (days, ...names) =>
+    pull({ state: 'closed', closed_at: at(days), labels: labelled(LABEL.paid, ...names) });
+  assert.deepEqual(await decide(closed(15), world({ comments: [slopNote()] }), two), [], 'five days closed');
+  const due = await decide(closed(13), world({ comments: [slopNote()] }), two);
+  assert.deepEqual(types(due), ['comment', 'label']);
+  assert.match(due[0].body, /\*\*Fee to be burned:\*\* 75 SLOP/);
+  assert.ok(due[0].body.includes(BURN_ADDRESS));
+  assert.deepEqual(due[1].add, [LABEL.burnDue]);
+  // Said once.
+  assert.deepEqual(await decide(closed(13, LABEL.burnDue), world({ comments: [slopNote()] }), two), []);
+  // A kept USDC fee stays in the fee wallet: nothing is burned.
+  const usdcNote = bot(`<!-- submission-fee:paid tx=${TX} from=${WALLET} -->`, 2);
+  assert.deepEqual(await decide(closed(5), world({ comments: [usdcNote] }), two), []);
+});
+
+test('reopening before the burn is signed calls it off; after, the burn stands and nothing is refunded', async () => {
+  const signed = bot(`<!-- submission-fee:burn-sending pay=${TX} tx=${TX2} nonce=3 -->`, 14);
+  const reopened = pull({ labels: labelled(LABEL.paid, LABEL.burnDue) });
+  assert.deepEqual(await decide(reopened, world({ comments: [slopNote()] }), two), [
+    { type: 'label', remove: [LABEL.burnDue] },
+  ]);
+  assert.deepEqual(await decide(reopened, world({ comments: [slopNote(), signed] }), two), []);
+
+  const mergedAfter = (...names) =>
+    pull({ state: 'closed', merged_at: at(18), closed_at: at(18), labels: labelled(LABEL.paid, ...names) });
+  assert.deepEqual(await decide(mergedAfter(LABEL.burnDue), world({ comments: [slopNote(), signed] }), two), []);
+  assert.deepEqual(await decide(mergedAfter(LABEL.burnDue, LABEL.burned), world({ comments: [slopNote(), signed] }), two), []);
+  // Someone took the label off by hand: still no refund once a burn was signed.
+  assert.deepEqual(await decide(mergedAfter(), world({ comments: [slopNote(), signed] }), two), []);
+  // Reopened and merged before anything was signed: the label comes off, then the refund falls due.
+  assert.deepEqual(types(await decide(mergedAfter(LABEL.burnDue), world({ comments: [slopNote()] }), two)), ['label']);
+  assert.match((await decide(mergedAfter(), world({ comments: [slopNote()] }), two))[0].body, /Refund due/);
 });
