@@ -47,9 +47,18 @@ asks for the fee, and let them pay it.
 
 ### What to know before you pay
 
-- Refunds are sent by hand, once a month. The refund is a promise made
-  here in writing, not a contract on chain.
+- **How a refund is sent.** When `.github/submission-fee.json` on `main` names a
+  `refundWallet`, a workflow sends the refund from that wallet by itself, normally within
+  the hour, and writes the transaction hash on your pull request. When it names none,
+  refunds are sent by hand, once a month. The pull request says which when the refund
+  falls due.
+- The automatic refund goes to the wallet that paid, for the fee and no more. If it cannot
+  be sent, the pull request is labelled `fee-refund-check` and a maintainer sends it.
+- Either way the refund is a promise made here in writing, kept by a script anyone can
+  read. It is not a contract on chain: the project can turn the script off.
 - The only valid fee address is the one in `.github/submission-fee.json` on `main`,
   repeated above. Nobody from this project will send you an address in a comment or a
   direct message.
-- `checks/submission-fee.mjs` is the whole rule. It moves no money.
+- `checks/submission-fee.mjs` is the whole rule and moves no money.
+  `checks/submission-fee-refund.mjs` sends refunds and nothing else: only to a wallet
+  whose fee payment it has checked on Base itself, once for each payment.

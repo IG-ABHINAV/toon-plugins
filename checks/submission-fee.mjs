@@ -3,7 +3,9 @@
 // slop.cash to the address in `.github/submission-fee.json`. This script reads the open
 // pull requests, checks each payment on chain, and labels, comments, closes or reopens.
 //
-// It moves no money. A refund is a "refund due" comment; a person sends it.
+// It moves no money. A refund is a "refund due" comment and label. When the settings
+// name a `refundWallet`, `checks/submission-fee-refund.mjs` sends it; otherwise a person
+// does.
 //
 // Run by `.github/workflows/submission-fee.yml` on a schedule with the repository's own
 // token. It never checks out or runs a pull request's code. Text from a pull request is
@@ -15,24 +17,31 @@
 //     alone, since anyone can paste a marker into a comment;
 //   - a `Transfer` log emitted by the USDC contract itself.
 
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-export const LABEL = { paid: 'fee-paid', needed: 'fee-needed', refundDue: 'fee-refund-due' };
+export const LABEL = {
+  paid: 'fee-paid',
+  needed: 'fee-needed',
+  refundDue: 'fee-refund-due',
+  // Set by the refund sender: the refund went out, or it could not and a person must look.
+  refunded: 'fee-refunded',
+  refundCheck: 'fee-refund-check',
+};
 export const BOT = 'github-actions[bot]';
 const TRANSFER =
   '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const DAY = 24 * 60 * 60 * 1000;
 const EXEMPT = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 
-const mark = {
+export const mark = {
   needed: '<!-- submission-fee:needed -->',
   closed: '<!-- submission-fee:closed-unpaid -->',
   refund: '<!-- submission-fee:refund-due -->',
   paid: (tx, from) => `<!-- submission-fee:paid tx=${tx} from=${from} -->`,
   rejected: (tx) => `<!-- submission-fee:rejected tx=${tx} -->`,
 };
-const PAID_MARK = /<!-- submission-fee:paid tx=(0x[0-9a-f]{64}) from=(0x[0-9a-f]{40}) -->/;
+export const PAID_MARK = /<!-- submission-fee:paid tx=(0x[0-9a-f]{64}) from=(0x[0-9a-f]{40}) -->/;
 
 const address = (value) => /^0x[0-9a-fA-F]{40}$/.test(value ?? '');
 
@@ -57,6 +66,8 @@ export function settings(raw, repo = 'toon-protocol/toon-plugins') {
     confirmations: days(raw.confirmations, 60),
     closeUnpaidAfter: days(raw.closeUnpaidAfterDays, 7) * DAY,
     refundUndecidedAfter: days(raw.refundUndecidedAfterDays, 14) * DAY,
+    // The wallet that sends refunds by itself. Absent or invalid: refunds are sent by hand.
+    refundWallet: address(raw.refundWallet) ? raw.refundWallet.toLowerCase() : null,
   };
 }
 
@@ -72,7 +83,7 @@ export function exempt(pr) {
   return EXEMPT.has(pr.author_association) || pr.user?.type === 'Bot';
 }
 
-const topicFor = (account) => `0x${account.slice(2).toLowerCase().padStart(64, '0')}`;
+export const topicFor = (account) => `0x${account.slice(2).toLowerCase().padStart(64, '0')}`;
 
 /**
  * Why `receipt` is not a payment of the fee from `wallet`, or `null` when it is one.
@@ -99,9 +110,9 @@ export function paymentProblem({ receipt, block, head, wallet, cfg }) {
     : `it holds no transfer of at least ${cfg.display} from your registered wallet to the fee address`;
 }
 
-const has = (pr, label) => (pr.labels ?? []).some((entry) => entry.name === label);
-const ours = (comments) => comments.filter((comment) => comment.user?.login === BOT);
-const find = (comments, text) => ours(comments).find((comment) => comment.body.includes(text));
+export const has = (pr, label) => (pr.labels ?? []).some((entry) => entry.name === label);
+export const ours = (comments) => comments.filter((comment) => comment.user?.login === BOT);
+export const find = (comments, text) => ours(comments).find((comment) => comment.body.includes(text));
 
 function neededBody(cfg) {
   return [
@@ -132,7 +143,11 @@ const paidBody = (cfg, tx, wallet) =>
 const refundBody = (cfg, wallet, reason) =>
   [
     mark.refund,
-    `**Refund due:** ${cfg.display} to \`${wallet}\`, because ${reason}. Refunds are sent by hand once a month.`,
+    `**Refund due:** ${cfg.display} to \`${wallet}\`, because ${reason}. ${
+      cfg.refundWallet
+        ? 'It is sent automatically, normally within the hour.'
+        : 'Refunds are sent by hand once a month.'
+    }`,
   ].join('\n');
 
 /**
@@ -232,6 +247,14 @@ export async function decide(pr, deps, cfg) {
   return actions;
 }
 
+/**
+ * Whether any refund is waiting for the refund sender: marked due, and neither sent nor
+ * set aside for a person. `issues` are the issues labelled `fee-refund-due`.
+ */
+export function refundsPending(issues) {
+  return issues.some((issue) => !has(issue, LABEL.refunded) && !has(issue, LABEL.refundCheck));
+}
+
 /** Every transaction hash this script has already accepted, from its own comments. */
 export function usedHashes(comments) {
   return new Set(
@@ -243,9 +266,11 @@ export function usedHashes(comments) {
 
 // ---- Everything below talks to GitHub, slop.cash and Base. ----
 
-function github(repo, token) {
+export function github(repo, token) {
+  // GitHub Actions sets GITHUB_API_URL; a rehearsal points it at a stand-in.
+  const base = process.env.GITHUB_API_URL || 'https://api.github.com';
   const call = async (method, path, body) => {
-    const response = await fetch(path.startsWith('https://') ? path : `https://api.github.com/repos/${repo}${path}`, {
+    const response = await fetch(/^https?:\/\//.test(path) ? path : `${base}/repos/${repo}${path}`, {
       method,
       headers: {
         accept: 'application/vnd.github+json',
@@ -279,7 +304,7 @@ function github(repo, token) {
 
 // The public Base endpoint answers "request limit reached" under load, so each call is
 // tried a few times. A run that still fails is repeated by the next scheduled one.
-async function rpc(url, method, params) {
+export async function rpc(url, method, params) {
   let problem;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     if (attempt) await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
@@ -374,6 +399,14 @@ async function main() {
     }
   }
   if (failed) process.exitCode = 1;
+
+  // Tell the workflow whether to start the refund job, so it runs only when one is owed.
+  if (cfg.refundWallet && process.env.GITHUB_OUTPUT && !dryRun) {
+    const due = await api.pages(
+      `/issues?labels=${encodeURIComponent(LABEL.refundDue)}&state=all&per_page=100`,
+    );
+    appendFileSync(process.env.GITHUB_OUTPUT, `refunds=${refundsPending(due) ? 'pending' : 'none'}\n`);
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) await main();

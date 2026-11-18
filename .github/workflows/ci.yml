@@ -22,6 +22,9 @@ jobs:
           node-version: '22.12.0'
       - name: Test the skill-command check
         run: node --test checks/*.test.mjs
+      # The refund sender's signing module has the repository's only pinned npm dependency.
+      - name: Test the submission-fee refund signer
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix checks/refund && node --test checks/refund/sign.test.mjs
       # toon_cli's own gate checks only the copy of these skills it vendors at a pinned
       # SHA, and toon-client's CI checks this repository's main unpinned, so a skill that
       # names a command its client lacks must fail here (toon-plugins#2).

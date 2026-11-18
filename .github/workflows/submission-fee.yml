@@ -4,8 +4,14 @@
 # while `enabled` is false there, a run prints one line and changes nothing.
 #
 # Scheduled, so it always runs `main`'s own copy of the script with the repository's own
-# token. It never checks out a pull request's code, needs no secret, and moves no money.
-# Not `pull_request_target`: nothing here runs because a pull request arrived.
+# token. It never checks out a pull request's code. Not `pull_request_target`: nothing
+# here runs because a pull request arrived.
+#
+# Two jobs. `check` needs no secret and moves no money. `refund` runs only when `check`
+# reports a refund waiting and the settings name a `refundWallet`; it sends that refund
+# from the wallet whose key is the secret REFUND_WALLET_KEY of the environment
+# `submission-fee-refunds`. That environment allows the `main` branch only, so a workflow
+# on any other branch cannot read the key.
 
 name: submission-fee
 
@@ -29,14 +35,43 @@ jobs:
     if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      refunds: ${{ steps.fees.outputs.refunds }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22.12.0'
       - name: Check submission fees
+        id: fees
         run: node checks/submission-fee.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
           # Optional: another Base endpoint, when the public one is refusing requests.
           BASE_RPC_URL: ${{ vars.BASE_RPC_URL }}
+
+  refund:
+    needs: check
+    if: needs.check.outputs.refunds == 'pending'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: submission-fee-refunds
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      # One pinned dependency, for signing. No install scripts run.
+      - run: npm ci --ignore-scripts --no-audit --no-fund --prefix checks/refund
+      - name: Send refunds that are due
+        run: node checks/submission-fee-refund.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_RPC_URL: ${{ vars.BASE_RPC_URL }}
+          REFUND_WALLET_KEY: ${{ secrets.REFUND_WALLET_KEY }}
