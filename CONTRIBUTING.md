@@ -5,9 +5,9 @@ Pull requests are welcome. CI runs `node --test checks/*.test.mjs` and
 
 This repository has a monthly pool on Slop: https://slop.cash/projects/toon-plugins
 
-## Submission fee (pilot)
+## Submission fee
 
-**Status: on, for pull requests opened from 18 November 2026, 12:00 UTC.** The pilot is on
+**Status: on, for pull requests opened from 18 November 2026, 12:00 UTC.** The fee is on
 only while `.github/submission-fee.json` on `main` says `"enabled": true`. That file also
 holds the start time and the fee address.
 
@@ -47,7 +47,7 @@ asks for the fee, and let them pay it.
 
 ### What to know before you pay
 
-- This is a pilot. Refunds are sent by hand, once a month. The refund is a promise made
+- Refunds are sent by hand, once a month. The refund is a promise made
   here in writing, not a contract on chain.
 - The only valid fee address is the one in `.github/submission-fee.json` on `main`,
   repeated above. Nobody from this project will send you an address in a comment or a

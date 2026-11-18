@@ -1,4 +1,4 @@
-# The submission fee pilot (CONTRIBUTING.md). Every 15 minutes this reads the open pull
+# The submission fee (CONTRIBUTING.md). Every 15 minutes this reads the open pull
 # requests, checks each outside contributor's fee payment on Base, and labels, comments,
 # closes or reopens. The rules and the on/off switch are `.github/submission-fee.json`;
 # while `enabled` is false there, a run prints one line and changes nothing.
