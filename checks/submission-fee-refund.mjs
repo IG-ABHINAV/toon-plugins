@@ -264,6 +264,11 @@ async function main() {
   ).filter((issue) => !has(issue, LABEL.refunded) && !has(issue, LABEL.refundCheck));
 
   const from = cfg.refundWallet;
+  const usdc = async () =>
+    BigInt(await call('eth_call', [{ to: cfg.token, data: `0x70a08231${from.slice(2).padStart(64, '0')}` }, 'latest']));
+  console.log(
+    `Refund wallet ${from}: key matches, ${await usdc()} USDC base units, ${BigInt(await call('eth_getBalance', [from, 'latest']))} wei for gas, ${due.length} refund(s) waiting.`,
+  );
   const fees = async () => {
     const price = BigInt(await call('eth_gasPrice'));
     const tip = price / 10n > 1_000_000n ? price / 10n : 1_000_000n;
@@ -281,10 +286,7 @@ async function main() {
     block: (number) => call('eth_getBlockByNumber', [number, false]),
     nonce: async () => Number(BigInt(await call('eth_getTransactionCount', [from, 'latest']))),
     funds: async (amount) => {
-      const held = BigInt(
-        await call('eth_call', [{ to: cfg.token, data: `0x70a08231${from.slice(2).padStart(64, '0')}` }, 'latest']),
-      );
-      if (held < amount) return 'it holds too little USDC';
+      if ((await usdc()) < amount) return 'it holds too little USDC';
       const { maxFeePerGas } = await fees();
       const ether = BigInt(await call('eth_getBalance', [from, 'latest']));
       return ether < 100_000n * maxFeePerGas ? 'it holds too little ETH for gas' : null;

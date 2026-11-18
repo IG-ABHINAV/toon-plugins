@@ -11,7 +11,7 @@ This repository has a monthly pool on Slop: https://slop.cash/projects/toon-plug
 only while `.github/submission-fee.json` on `main` says `"enabled": true`. That file also
 holds the start time and the fee address.
 
-**Fee address (USDC on Base): `0x067672F421262f086e25b1789eaE05D9886D132d`**
+**Fee address (USDC on Base): `0x078195cf9DF45dA7845f1C7aFe5318B9A69a5827`**
 
 A maintainer reads every pull request. The fee pays for that reading, and makes it worth
 checking for an open pull request on the same topic before you send another.
@@ -22,9 +22,9 @@ checking for an open pull request on the same topic before you send another.
   maintainer reviews it.
 - Maintainers, members of the organisation and bots pay nothing. Neither does a pull
   request opened before the start time.
-- The fee goes to the project's wallet, the one that funds this repository's pool on
-  Slop. It does not go to the person who reviews your pull request, so a reviewer gains
-  nothing by merging it or by closing it.
+- The fee goes to a wallet the project keeps for this fee, which is also the wallet
+  refunds are sent from. It does not go to the person who reviews your pull request, so
+  a reviewer gains nothing by merging it or by closing it.
 - **Merged:** 2 USDC is sent back to the wallet that paid.
 - **Closed without a merge:** the fee is not sent back. That includes a pull request that
   repeats one already open.
