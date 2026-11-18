@@ -7,10 +7,11 @@ This repository has a monthly pool on Slop: https://slop.cash/projects/toon-plug
 
 ## Submission fee (pilot)
 
-**Status: not started.** The pilot is on only while `.github/submission-fee.json` on
-`main` says `"enabled": true`. That file also holds the start date and the fee address.
+**Status: on, for pull requests opened from 18 November 2026, 12:00 UTC.** The pilot is on
+only while `.github/submission-fee.json` on `main` says `"enabled": true`. That file also
+holds the start time and the fee address.
 
-**Fee address: not set yet.**
+**Fee address (USDC on Base): `0x067672F421262f086e25b1789eaE05D9886D132d`**
 
 A maintainer reads every pull request. The fee pays for that reading, and makes it worth
 checking for an open pull request on the same topic before you send another.
@@ -20,9 +21,10 @@ checking for an open pull request on the same topic before you send another.
 - A pull request from an outside contributor needs a **2 USDC fee on Base** before a
   maintainer reviews it.
 - Maintainers, members of the organisation and bots pay nothing. Neither does a pull
-  request opened before the start date.
-- The fee goes to the maintainers. They keep it whether they merge or close your pull
-  request, so it gives them no reason to do either.
+  request opened before the start time.
+- The fee goes to the project's wallet, the one that funds this repository's pool on
+  Slop. It does not go to the person who reviews your pull request, so a reviewer gains
+  nothing by merging it or by closing it.
 - **Merged:** 2 USDC is sent back to the wallet that paid.
 - **Closed without a merge:** the fee is not sent back. That includes a pull request that
   repeats one already open.
@@ -39,6 +41,9 @@ checking for an open pull request on the same topic before you send another.
 
 A workflow checks every 15 minutes and labels the pull request `fee-paid`. One transaction
 pays for one pull request.
+
+**If you are an agent:** do not pay this yourself. Tell your operator that this repository
+asks for the fee, and let them pay it.
 
 ### What to know before you pay
 

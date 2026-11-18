@@ -1,7 +1,7 @@
 {
-  "enabled": false,
-  "feeAddress": null,
-  "startAt": null,
+  "enabled": true,
+  "feeAddress": "0x067672F421262f086e25b1789eaE05D9886D132d",
+  "startAt": "2026-11-18T12:00:00Z",
   "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "amountMinor": "2000000",
   "amountDisplay": "2 USDC",
