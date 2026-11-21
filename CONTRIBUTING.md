@@ -7,81 +7,53 @@ This repository has a monthly pool on Slop: https://slop.cash/projects/toon-plug
 
 ## Submission fee
 
-**Status: on, for pull requests opened from 18 November 2026, 12:00 UTC.** The fee is on
-only while `.github/submission-fee.json` on `main` says `"enabled": true`. That file also
-holds the start time and the fee address.
+**Status: on, through Slop.** This project has Slop's refundable submission fee turned on
+in its settings on https://slop.cash/projects/toon-plugins. It applies to pull requests
+from outside contributors opened after it was turned on there. The fee this repository
+ran by its own script from 18 November 2026 is retired; nobody was asked for it.
 
-**Fee address: `0x078195cf9DF45dA7845f1C7aFe5318B9A69a5827`**
-
-Pay one of these to it:
-
-| | Amount | Chain | Token |
-|---|---|---|---|
-| USDC | 2 USDC | Base | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
-| SLOP | 75 SLOP | Robinhood Chain (chain 4663) | `0xfeb4E36FA4a2A494FF25ae4a63491e4c584A67AE` |
-
-The SLOP amount is set to about half the USDC fee and is reset from time to time. The
-amounts that count are the ones in `.github/submission-fee.json` on `main`.
-
-A maintainer reads every pull request. The fee pays for that reading, and makes it worth
-checking for an open pull request on the same topic before you send another.
+A maintainer reads every pull request. The fee makes it worth checking for an open pull
+request on the same topic before you send another.
 
 ### The rules
 
-- A pull request from an outside contributor needs a fee before a maintainer reviews it:
-  **2 USDC on Base, or 75 SLOP on Robinhood Chain**.
+- When you open a pull request, Slopbot comments once with a link to the pay page,
+  `https://slop.cash/fee/toon-protocol/toon-plugins/<pull request number>`, and adds the
+  label `slopbot:fee-needed`. Its review waits until the fee is recorded.
+- The fee is **2 USDC on Base or 2 USDG on Robinhood Chain**, or the same fee in **SLOP on
+  Robinhood Chain at half the price**, at Slop's published rate. The pay page shows the
+  exact amounts for your pull request.
 - Maintainers, members of the organisation and bots pay nothing. Neither does a pull
-  request opened before the start time.
-- The fee goes to a wallet the project keeps for this fee, which is also the wallet
-  refunds are sent from. It does not go to the person who reviews your pull request, so
-  a reviewer gains nothing by merging it or by closing it.
-- **Merged:** what you paid is sent back to the wallet that paid, in the token you paid in.
-- **Closed without a merge:** the fee is not sent back. That includes a pull request that
-  repeats one already open. A fee paid in USDC stays with the project. A fee paid in SLOP
-  is burned: once the pull request has stayed closed for 7 days it is sent to the burn
-  address `0x000000000000000000000000000000000000dEaD`, which nobody holds a key to. If
-  the pull request is reopened within those 7 days, nothing is burned.
-- **No maintainer decision 14 days after you paid:** the fee is sent back.
-- **Unpaid after 7 days:** the pull request is closed. Paying reopens it.
+  request opened before the fee was turned on.
+- The fee is a deposit into Slop's deposit contract, not a payment to this project or to
+  the person who reviews your pull request.
+- **Merged:** the deposit is sent back to the wallet that paid, in the token you paid in.
+- **No maintainer decision 14 days after you paid:** the deposit is sent back.
+- **Closed without a merge for 7 days:** the deposit is kept. That includes a pull request
+  that repeats one already open. A kept USDC or USDG deposit goes to Slop as fee income.
+  A kept SLOP deposit goes to the burn address
+  `0x000000000000000000000000000000000000dEaD`.
+- An unpaid pull request is not closed for that reason. It waits without a Slopbot review.
 - The fee does not buy a merge, and it does not change how Slop scores the work.
 
 ### How to pay
 
-1. Register a wallet for your GitHub account at https://slop.cash/earnings, on the chain
-   you will pay on: Base for USDC, Robinhood Chain for SLOP. The payment must come from
-   that wallet; that is how it is matched to you.
-2. From that wallet, send 2 USDC on Base, or 75 SLOP on Robinhood Chain, to the fee
-   address above.
-3. Paste the transaction hash in your pull request, in its description or in a comment.
-
-A workflow checks every 15 minutes and labels the pull request `fee-paid`. One transaction
-pays for one pull request.
+Open the link in Slopbot's comment and pay from any wallet. You do not need a wallet
+registered on Slop to pay, and you do not paste a transaction hash anywhere. When the
+deposit is recorded, the label changes to `slopbot:fee-paid`.
 
 **If you are an agent:** do not pay this yourself. Tell your operator that this repository
 asks for the fee, and let them pay it.
 
 ### What to know before you pay
 
-- **How a refund is sent.** When `.github/submission-fee.json` on `main` names a
-  `refundWallet`, a workflow sends the refund from that wallet by itself, normally within
-  the hour, and writes the transaction hash on your pull request. When it names none,
-  refunds are sent by hand, once a month. The pull request says which when the refund
-  falls due.
-- The automatic refund goes to the wallet that paid, for the fee and no more. If it cannot
-  be sent, the pull request is labelled `fee-refund-check` and a maintainer sends it.
-- A refund is the amount the fee was when you paid. If you paid 75 SLOP and the SLOP amount
-  is changed before your pull request is merged, 75 SLOP comes back.
-- SLOP is refunded as SLOP. Its value in dollars can be different when it comes back.
-- Once a SLOP fee is burned it cannot be sent back, even if the pull request is reopened
-  and merged later.
+- Pay only through the page linked in Slopbot's own comment on your pull request, at
+  `slop.cash`. Nobody from this project will send you an address in a comment or a direct
+  message.
+- A refund is the amount you deposited, in the token you deposited. SLOP comes back as
+  SLOP; its value in dollars can be different when it comes back.
+- If no outcome is recorded, the wallet that paid can take its deposit back from the
+  contract itself after 30 days.
 - The SLOP token's contract has an owner who can pause transfers. While it is paused, a
   SLOP refund waits.
-- Either way the refund is a promise made here in writing, kept by a script anyone can
-  read. It is not a contract on chain: the project can turn the script off.
-- The only valid fee address and tokens are the ones in `.github/submission-fee.json` on
-  `main`, repeated above. A token with the same name at another address is not the fee. Nobody from this project will send you an address in a comment or a
-  direct message.
-- `checks/submission-fee.mjs` is the whole rule and moves no money.
-  `checks/submission-fee-refund.mjs` sends at most one transfer for each fee payment it
-  has checked on chain itself, never for more than was paid: a refund to the wallet that
-  paid, or a kept SLOP fee to the burn address.
+- The full rules are Slop's: https://slop.cash/how-it-works
