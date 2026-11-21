@@ -1,9 +1,0 @@
-{
-  "name": "submission-fee-refund",
-  "private": true,
-  "type": "module",
-  "description": "The one dependency of checks/refund/sign.mjs, pinned. See CONTRIBUTING.md, Submission fee.",
-  "dependencies": {
-    "viem": "2.57.13"
-  }
-}
