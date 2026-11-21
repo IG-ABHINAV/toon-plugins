@@ -56,4 +56,4 @@ asks for the fee, and let them pay it.
   contract itself after 30 days.
 - The SLOP token's contract has an owner who can pause transfers. While it is paused, a
   SLOP refund waits.
-- The full rules are Slop's: https://slop.cash/how-it-works
+- Slop explains the fee at https://slop.cash/how-it-works#faq
