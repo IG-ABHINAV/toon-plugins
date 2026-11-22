@@ -146,6 +146,8 @@ jobs:
       # The token the agents hold. They work from issue text and comments, which anyone
       # can write, so this one can read and write issues and nothing else: it cannot
       # push, and it cannot open or edit a PR. The runner pushes with its own token.
+      # Pull requests: read only, because docs/agents/issue-tracker.md resolves a bare
+      # `#N` with `gh pr view` first; reading a public repository's PRs grants nothing new.
       - name: Generate the sandbox's issues-only token
         id: sandbox-token
         uses: actions/create-github-app-token@v2
@@ -153,6 +155,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           permission-issues: write
+          permission-pull-requests: read
 
       - name: Run the implement runner
         timeout-minutes: 170
@@ -165,6 +168,7 @@ jobs:
           SANDBOX_GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
           APP_ID: ${{ secrets.APP_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+          # A new secret here must also join the redaction step's list below.
         run: .sandcastle/node_modules/.bin/tsx .sandcastle/agent-implement-issue.ts
 
       # Take the issue out of the queue so it doesn't retry on every sweep, and say

@@ -67,15 +67,12 @@ const issue = JSON.parse(
 const hooks = {
   sandbox: {
     onSandboxReady: [
-      // `gh auth setup-git` makes git read GH_TOKEN and stores no token on disk.
-      // The sandbox's GH_TOKEN can only read and write issues, so an agent's own
-      // `git push` is refused; the runner pushes with its own credential
-      // (pushBranch). The second command drops the checkout action's auth header.
-      // Guarded so local runs without a token still start.
+      // Drop the checkout action's auth header, so no credential from the host's
+      // checkout rides along in the container's git config. git needs no token in
+      // the sandbox: the repository is public, the sandbox's GH_TOKEN can only read
+      // and write issues, and the runner pushes with its own credential (pushBranch).
       {
-        command:
-          'if [ -n "$GH_TOKEN" ]; then gh auth setup-git; ' +
-          "git config --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true; fi",
+        command: "git config --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true",
       },
     ],
   },
@@ -104,8 +101,7 @@ const PUSH_URLS = new Set([`https://github.com/${REPO}`, `https://github.com/${R
 
 // Git credential helper that reads the token from TOKEN_PATH. The empty
 // `credential.helper=` before it on the command line resets git's helper list, so
-// the helper `gh auth setup-git` installed (holding the token from container start)
-// is not consulted first. The token reaches the file over stdin, so it never
+// any helper configured earlier in the container is not consulted first. The token reaches the file over stdin, so it never
 // appears in argv or in a log line.
 //
 // The agent sessions run before the push with write access to the checkout, so
