@@ -13,6 +13,7 @@ import {
   lowestVersion,
   namedCommands,
   pinnedSha256,
+  releasePlatform,
 } from './skill-commands.mjs';
 
 /** A repository holding `files` (path → text), as a directory. */
@@ -179,4 +180,15 @@ test('every pinned client lockfile installs only registry packages with integrit
       assert.ok(!entry.hasInstallScript, `${dir}: ${name} has an install script`);
     }
   }
+});
+
+test('picks the release asset for the host platform', () => {
+  assert.equal(releasePlatform('linux', 'x64'), 'linux-x86_64');
+  assert.equal(releasePlatform('linux', 'arm64'), 'linux-aarch64');
+  assert.equal(releasePlatform('darwin', 'arm64'), 'macos-aarch64');
+});
+
+test('fails with a clear message on a platform toon publishes no asset for', () => {
+  assert.throws(() => releasePlatform('darwin', 'x64'), /no release asset for macOS on x86_64/);
+  assert.throws(() => releasePlatform('win32', 'x64'), /no release asset for win32/);
 });
