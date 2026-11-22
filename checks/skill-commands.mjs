@@ -31,7 +31,7 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { arch, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -105,6 +105,19 @@ export function lowestVersion(skill, rangeKey) {
  */
 
 /**
+ * The lowest client version a client plugin's sending skill says it supports.
+ *
+ * @param {string} root the repository root
+ * @param {keyof typeof CLIENTS} plugin
+ * @returns {string}
+ */
+export function lowestSupportedVersion(root, plugin) {
+  const { sendingSkill, rangeKey } = CLIENTS[plugin];
+  const skillFile = join(root, 'plugins', plugin, 'skills', sendingSkill, 'SKILL.md');
+  return lowestVersion(readFileSync(skillFile, 'utf8'), rangeKey);
+}
+
+/**
  * Every problem with the commands the skills under `root/plugins` name, one line each.
  * No problems means the check passes.
  *
@@ -125,8 +138,7 @@ export async function checkRepo(root, runHelp) {
       );
       if (owner === plugin) {
         if (named.length === 0) continue;
-        const sendingSkill = join(root, 'plugins', plugin, 'skills', client.sendingSkill, 'SKILL.md');
-        const version = lowestVersion(readFileSync(sendingSkill, 'utf8'), client.rangeKey);
+        const version = lowestSupportedVersion(root, plugin);
         problems.push(...(await checkCommands(client.binary, version, named, runHelp)));
       } else {
         for (const { path, command } of named) {
@@ -230,9 +242,13 @@ export function lockedClient(checks, version) {
         ` checks/clients/toon-client-${version}/ (see the top of checks/skill-commands.mjs).`,
     );
   }
-  const locked = JSON.parse(readFileSync(lockfile, 'utf8')).packages?.['node_modules/@toon-protocol/client']?.version;
+  const lock = JSON.parse(readFileSync(lockfile, 'utf8'));
+  const locked = lock.packages?.['node_modules/@toon-protocol/client']?.version;
   if (locked !== version) {
-    throw new Error(`${lockfile} pins @toon-protocol/client ${locked}, not ${version}.`);
+    throw new Error(
+      `${lockfile} pins @toon-protocol/client ${locked}, not ${version}` +
+        ' (see the top of checks/skill-commands.mjs).',
+    );
   }
   return dir;
 }
@@ -253,7 +269,6 @@ export function clientEnv(home, hostEnv = process.env) {
 /** Installs each client version once, into a temporary directory, and runs it there. */
 function realBinaries() {
   const pins = JSON.parse(readFileSync(join(CHECKS, 'client-pins.json'), 'utf8'));
-  const home = mkdtempSync(join(tmpdir(), 'skill-commands-home-'));
   /** @type {Map<string, string>} */
   const installed = new Map();
   /** @type {(binary: string, version: string) => string} */
@@ -276,6 +291,8 @@ function realBinaries() {
       // --ignore-scripts: the gate runs `--help`, so no package needs to run code at install time.
       const locked = lockedClient(CHECKS, version);
       for (const file of ['package.json', 'package-lock.json']) copyFileSync(join(locked, file), join(dir, file));
+      // npm itself keeps the caller's environment (~/.npmrc, npm_config_*) on purpose: it only
+      // downloads, and with --ignore-scripts no package code runs. Only the client runs bare.
       execFileSync('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], {
         cwd: dir,
         stdio: ['ignore', 'ignore', 'inherit'],
@@ -293,9 +310,15 @@ function realBinaries() {
       command = install(binary, version);
       installed.set(key, command);
     }
-    const run = spawnSync(command, [...path, '--help'], { encoding: 'utf8', env: clientEnv(home) });
-    if (run.error) throw run.error;
-    return { exitCode: run.status ?? 1, stderr: run.stderr };
+    // A fresh, empty HOME for every run, removed afterwards, so nothing one run writes reaches the next.
+    const home = mkdtempSync(join(tmpdir(), 'skill-commands-home-'));
+    try {
+      const run = spawnSync(command, [...path, '--help'], { encoding: 'utf8', env: clientEnv(home) });
+      if (run.error) throw run.error;
+      return { exitCode: run.status ?? 1, stderr: run.stderr };
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   };
 }
 

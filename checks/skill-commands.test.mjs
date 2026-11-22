@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { checkRepo, clientEnv, CLIENTS, lockedClient, lowestVersion, namedCommands, pinnedSha256 } from './skill-commands.mjs';
+import {
+  checkRepo,
+  clientEnv,
+  lockedClient,
+  lowestSupportedVersion,
+  lowestVersion,
+  namedCommands,
+  pinnedSha256,
+} from './skill-commands.mjs';
 
 /** A repository holding `files` (path → text), as a directory. */
 function repo(files) {
@@ -150,14 +158,25 @@ test('a downloaded client runs with none of the caller\'s environment but PATH',
 
 test('this repository pins the client versions its own sending skills state', () => {
   const checks = dirname(fileURLToPath(import.meta.url));
-  const lowest = (plugin) => {
-    const { sendingSkill, rangeKey } = CLIENTS[plugin];
-    const skillFile = join(checks, '..', 'plugins', plugin, 'skills', sendingSkill, 'SKILL.md');
-    return lowestVersion(readFileSync(skillFile, 'utf8'), rangeKey);
-  };
+  const lowest = (plugin) => lowestSupportedVersion(join(checks, '..'), plugin);
   const pins = JSON.parse(readFileSync(join(checks, 'client-pins.json'), 'utf8'));
 
   const toon = lowest('toon-cli');
   for (const cpu of ['x86_64', 'aarch64']) pinnedSha256(pins, toon, `toon-v${toon}-linux-${cpu}.tar.gz`);
   lockedClient(checks, lowest('toon-client'));
+});
+
+test('every pinned client lockfile installs only registry packages with integrity and no install scripts', () => {
+  const clients = join(dirname(fileURLToPath(import.meta.url)), 'clients');
+  const dirs = readdirSync(clients);
+  assert.ok(dirs.length > 0);
+  for (const dir of dirs) {
+    const { packages } = JSON.parse(readFileSync(join(clients, dir, 'package-lock.json'), 'utf8'));
+    for (const [name, entry] of Object.entries(packages)) {
+      if (name === '') continue;
+      assert.ok(entry.resolved?.startsWith('https://registry.npmjs.org/'), `${dir}: ${name} is not from registry.npmjs.org`);
+      assert.ok(entry.integrity, `${dir}: ${name} has no integrity hash`);
+      assert.ok(!entry.hasInstallScript, `${dir}: ${name} has an install script`);
+    }
+  }
 });
